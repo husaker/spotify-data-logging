@@ -1,0 +1,6 @@
+streamlit>=1.20.0
+streamlit-autorefresh
+gspread
+google-auth
+pandas
+requests 

@@ -5,30 +5,45 @@ import re
 import pandas as pd
 import requests
 import urllib.parse
-import time
-from datetime import datetime
+import json
+import os
+from streamlit_autorefresh import st_autorefresh
 
 st.title("Spotify Logging в Google Таблицу")
 
 st.markdown("""
-**Инструкция по авторизации Spotify:**
+**Инструкция по авторизации и настройке:**
 - Для логирования треков требуется доступ к вашему аккаунту Spotify через официальный API.
-- Для этого нужно создать приложение в [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/applications), получить Client ID и Client Secret, а также добавить Redirect URI (например, `http://localhost:8501`).
-- После этого вы сможете авторизоваться и разрешить приложению доступ к информации о прослушиваемых треках.
+- Для работы с Google Таблицей:
+    - Таблица должна содержать следующие заголовки в первой строке: `Date`, `Track`, `Artist`, `Spotify ID`, `URL`.
+    - В настройках доступа Google Таблицы добавьте в редакторы email сервисного аккаунта (`spotify-data-reader@spotify-listening-vix-prohect.iam.gserviceaccount.com`).
+- После этого вы сможете авторизоваться и разрешить приложению доступ к информации о прослушиваемых треках, а также логировать их в Google Таблицу.
 """)
+
+st.markdown(
+    """
+    <style>
+    .stButton button { margin-bottom: 0px !important; margin-top: 0px !important; }
+    .stAlert { margin-bottom: 0px !important; margin-top: 0px !important; }
+    .element-container { margin-bottom: 0px !important; margin-top: 0px !important; }
+    .st-cb { margin-bottom: 0px !important; margin-top: 0px !important; }
+    .stContainer { padding-top: 0px !important; padding-bottom: 0px !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # --- Session State Defaults ---
 def init_state():
     for key, val in {
         'sheet_url': '',
-        'client_id': '',
-        'client_secret': '',
         'auth_code': '',
         'access_token': '',
         'refresh_token': '',
         'spotify_auth_success': False,
         'logging_active': False,
-        'last_logged_track_id': None
+        'last_logged_track_id': None,
+        'last_logged_played_at': None
     }.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -39,11 +54,34 @@ sheet_url = st.text_input("Ссылка на Google Таблицу:", value=st.s
 # --- Spotify OAuth ---
 st.header("Авторизация Spotify")
 
+# Читаем client_id и client_secret из файла
+SPOTIFY_CREDS_PATH = "spotify-credentials.json"
+if not os.path.exists(SPOTIFY_CREDS_PATH):
+    st.error("Файл spotify-credentials.json не найден. Пожалуйста, создайте его и добавьте client_id и client_secret.")
+    st.stop()
+with open(SPOTIFY_CREDS_PATH, "r", encoding="utf-8") as f:
+    spotify_creds = json.load(f)
+client_id = spotify_creds.get("client_id")
+client_secret = spotify_creds.get("client_secret")
+if not client_id or not client_secret or "ВАШ_CLIENT_ID" in client_id:
+    st.error("Пожалуйста, заполните spotify-credentials.json своими данными.")
+    st.stop()
+
 # Получаем code из query params, если он есть
 query_params = st.query_params
-code_from_url = query_params.get("code", [None])[0] if "code" in query_params else None
+
+code_from_url = None
+if "code" in query_params:
+    code_val = query_params["code"]
+    if isinstance(code_val, list):
+        code_from_url = code_val[0]
+    else:
+        code_from_url = code_val
+
+# Только если код изменился, обновляем session_state (чтобы не было жёлтой плашки)
 if code_from_url and not st.session_state.spotify_auth_success:
-    st.session_state.auth_code = code_from_url
+    if st.session_state.auth_code != code_from_url:
+        st.session_state.auth_code = code_from_url
 
 def extract_sheet_id(url):
     match = re.search(r"/d/([a-zA-Z0-9-_]+)", url)
@@ -57,58 +95,56 @@ def show_spotify_status():
 if st.session_state.spotify_auth_success:
     show_spotify_status()
 else:
-    client_id = st.text_input("Spotify Client ID:", value=st.session_state.client_id, key="client_id")
-    client_secret = st.text_input("Spotify Client Secret:", type="password", value=st.session_state.client_secret, key="client_secret")
     redirect_uri = "http://localhost:8501"
     scope = "user-read-currently-playing user-read-recently-played"
-
-    if client_id and client_secret:
-        params = {
-            "client_id": client_id,
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": scope,
-            "show_dialog": "true"
-        }
-        auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
-        st.markdown(f"[Перейти для авторизации Spotify]({auth_url})")
-        # Если code уже есть в URL, сразу предлагаем получить токен
-        auth_code = st.text_input("Вставьте код из URL после авторизации (параметр ?code=...):", value=st.session_state.auth_code, key="auth_code")
-        auto_get_token = code_from_url and not st.session_state.spotify_auth_success
-        if st.button("Получить access token") or auto_get_token:
-            if not auth_code:
-                st.error("Пожалуйста, вставьте код авторизации из URL.")
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "show_dialog": "true"
+    }
+    auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
+    st.write(f'<a href="{auth_url}" target="_self">Перейти для авторизации Spotify</a>', unsafe_allow_html=True)
+    # Кнопка 'Получить access token' удалена, токен получается только автоматически
+    auto_get_token = code_from_url and not st.session_state.spotify_auth_success
+    if auto_get_token:
+        auth_code = st.session_state.auth_code
+        if not auth_code:
+            st.error("Пожалуйста, вставьте код авторизации из URL.")
+        else:
+            token_url = "https://accounts.spotify.com/api/token"
+            data = {
+                "grant_type": "authorization_code",
+                "code": auth_code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret
+            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            response = requests.post(token_url, data=data, headers=headers)
+            if response.status_code == 200:
+                token_info = response.json()
+                st.session_state.access_token = token_info.get("access_token")
+                st.session_state.refresh_token = token_info.get("refresh_token", st.session_state.refresh_token)
+                st.session_state.spotify_auth_success = True
+                show_spotify_status()
             else:
-                token_url = "https://accounts.spotify.com/api/token"
-                data = {
-                    "grant_type": "authorization_code",
-                    "code": auth_code,
-                    "redirect_uri": redirect_uri,
-                    "client_id": client_id,
-                    "client_secret": client_secret
-                }
-                headers = {"Content-Type": "application/x-www-form-urlencoded"}
-                response = requests.post(token_url, data=data, headers=headers)
-                if response.status_code == 200:
-                    token_info = response.json()
-                    st.session_state.access_token = token_info.get("access_token")
-                    st.session_state.refresh_token = token_info.get("refresh_token", st.session_state.refresh_token)
-                    st.session_state.spotify_auth_success = True
-                    show_spotify_status()
-                else:
-                    st.error(f"Ошибка получения токена: {response.text}")
-                    st.session_state.spotify_auth_success = False
-
-st.header("")
+                st.error(f"Ошибка получения токена: {response.text}")
+                st.session_state.spotify_auth_success = False
 
 # --- Логирование треков ---
 def log_track_to_sheet(track, worksheet):
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    track_name = track['item']['name']
-    artist = ', '.join([a['name'] for a in track['item']['artists']])
-    spotify_id = track['item']['id']
-    url = track['item']['external_urls']['spotify']
-    worksheet.append_row([date_str, track_name, artist, spotify_id, url])
+    played_at = track['played_at']
+    # played_at приходит в формате ISO, можно преобразовать к локальному времени, если нужно
+    date_str = played_at  # теперь Date = played_at
+    track_name = track['track']['name']
+    artist = ', '.join([a['name'] for a in track['track']['artists']])
+    spotify_id = track['track']['id']
+    url = track['track']['external_urls']['spotify']
+    context_type = track.get('context', {}).get('type') if track.get('context') else None
+    worksheet.append_row([date_str, track_name, artist, spotify_id, url, context_type])
+    st.session_state.last_logged_played_at = played_at
     st.session_state.last_logged_track_id = spotify_id
 
 def refresh_access_token():
@@ -116,15 +152,14 @@ def refresh_access_token():
     data = {
         "grant_type": "refresh_token",
         "refresh_token": st.session_state.refresh_token,
-        "client_id": st.session_state.client_id,
-        "client_secret": st.session_state.client_secret
+        "client_id": client_id,
+        "client_secret": client_secret
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     response = requests.post(token_url, data=data, headers=headers)
     if response.status_code == 200:
         token_info = response.json()
         st.session_state.access_token = token_info.get("access_token")
-        # refresh_token может не вернуться, используем старый
         st.session_state.refresh_token = token_info.get("refresh_token", st.session_state.refresh_token)
         return True
     else:
@@ -134,79 +169,133 @@ def refresh_access_token():
         st.session_state.refresh_token = ''
         return False
 
-def get_current_track(token):
+def get_recent_tracks(token, after=None):
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
-    if resp.status_code == 200 and resp.json().get('item'):
-        return resp.json()
+    params = {"limit": 5}  # теперь по 5 треков
+    if after:
+        params["after"] = after
+    try:
+        resp = requests.get("https://api.spotify.com/v1/me/player/recently-played", headers=headers, params=params, timeout=10)
+    except requests.exceptions.Timeout:
+        st.error("Ошибка: запрос к Spotify API превысил таймаут (10 секунд). Проверьте соединение.")
+        return []
+    except Exception as e:
+        st.error(f"Ошибка при обращении к Spotify API: {e}")
+        return []
+    if resp.status_code == 200:
+        return resp.json().get('items', [])
     elif resp.status_code == 401:
-        # Токен истёк, пробуем обновить
         if refresh_access_token():
             headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
-            resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
-            if resp.status_code == 200 and resp.json().get('item'):
-                return resp.json()
-        return None
-    return None
+            try:
+                resp = requests.get("https://api.spotify.com/v1/me/player/recently-played", headers=headers, params=params, timeout=10)
+            except requests.exceptions.Timeout:
+                st.error("Ошибка: запрос к Spotify API превысил таймаут (10 секунд). Проверьте соединение.")
+                return []
+            except Exception as e:
+                st.error(f"Ошибка при обращении к Spotify API: {e}")
+                return []
+            if resp.status_code == 200:
+                return resp.json().get('items', [])
+        return []
+    else:
+        st.error(f"Ошибка Spotify API: {resp.status_code} — {resp.text}")
+        return []
 
 # Кнопка для запуска/остановки логирования
-def logging_controls():
-    if not st.session_state.logging_active:
-        if st.button("Старт логирования"):
-            st.session_state.logging_active = True
-            st.rerun()
-    else:
-        if st.button("Остановить логирование"):
-            st.session_state.logging_active = False
-            st.success("Логирование остановлено.")
-            st.rerun()
+# def logging_controls():
+#     if not st.session_state.logging_active:
+#         if st.button("Старт логирования"):
+#             st.session_state.logging_active = True
+#             st.rerun()
+#     else:
+#         if st.button("Остановить логирование"):
+#             st.session_state.logging_active = False
+#             st.success("Логирование остановлено.")
+#             st.rerun()
 
-# Основная логика логирования
+# --- Управляющий блок ---
+# with st.container():
+#     col1, col2 = st.columns([2, 5])
+#     with col1:
+#         if st.session_state.logging_active:
+#             if st.button("Остановить логирование", use_container_width=True):
+#                 st.session_state.logging_active = False
+#                 st.session_state.status_message = "Логирование остановлено."
+#         else:
+#             if st.button("Старт логирования", use_container_width=True):
+#                 st.session_state.logging_active = True
+#                 st.session_state.status_message = "Логирование запущено."
+#     with col2:
+#         if "status_message" in st.session_state:
+#             st.info(st.session_state.status_message)
+
+# --- Блок результатов ---
 if st.session_state.spotify_auth_success and sheet_url:
-    logging_controls()
-    if st.session_state.logging_active:
-        try:
-            sheet_id = extract_sheet_id(sheet_url)
-            scopes = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            creds = Credentials.from_service_account_file(
-                'google-credentials.json', scopes=scopes
+    with st.container():
+        if st.session_state.logging_active:
+            if st.button("Остановить логирование", use_container_width=True):
+                st.session_state.logging_active = False
+                st.success("Логирование остановлено.")
+            st.markdown(
+                """
+                <style>
+                .element-container:has(.stButton) + .element-container { margin-top: -32px !important; }
+                </style>
+                """,
+                unsafe_allow_html=True
             )
-            gc = gspread.authorize(creds)
-            sh = gc.open_by_key(sheet_id)
-            worksheet = sh.sheet1
-            # Проверяем, есть ли заголовки
-            all_rows = worksheet.get_all_values()
-            if not all_rows or all_rows[0] != ["Date", "Track", "Artist", "Spotify ID", "URL"]:
-                worksheet.insert_row(["Date", "Track", "Artist", "Spotify ID", "URL"], 1)
-            # Получаем текущий трек
-            track = get_current_track(st.session_state.access_token)
-            if track:
-                spotify_id = track['item']['id']
-                if st.session_state.last_logged_track_id != spotify_id:
-                    log_track_to_sheet(track, worksheet)
-                    st.success(f"Добавлен трек: {track['item']['name']} — {', '.join([a['name'] for a in track['item']['artists']])}")
+            try:
+                st_autorefresh(interval=120000, key="autorefresh")
+                sheet_id = extract_sheet_id(sheet_url)
+                scopes = [
+                    'https://www.googleapis.com/auth/spreadsheets',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+                creds = Credentials.from_service_account_file(
+                    'google-credentials.json', scopes=scopes
+                )
+                gc = gspread.authorize(creds)
+                sh = gc.open_by_key(sheet_id)
+                worksheet = sh.sheet1
+                all_rows = worksheet.get_all_values()
+                expected_header = ["Date", "Track", "Artist", "Spotify ID", "URL", "Context Type"]
+                if not all_rows or all_rows[0] != expected_header:
+                    worksheet.insert_row(expected_header, 1)
+                    all_rows = worksheet.get_all_values()
+                logged_pairs = set()
+                for row in all_rows[1:]:
+                    if len(row) >= 6:
+                        logged_pairs.add((row[3], row[0]))
+                try:
+                    recent_tracks = get_recent_tracks(st.session_state.access_token)
+                except Exception as e:
+                    st.error(f"Ошибка при получении треков: {e}")
+                    recent_tracks = []
+                new_logged = 0
+                for track in reversed(recent_tracks):
+                    spotify_id = track['track']['id']
+                    played_at = track['played_at']
+                    if (spotify_id, played_at) not in logged_pairs:
+                        log_track_to_sheet(track, worksheet)
+                        new_logged += 1
+                if new_logged:
+                    st.success(f"Добавлено новых треков: {new_logged}")
                 else:
-                    st.info("Текущий трек уже записан.")
-            else:
-                st.warning("Нет данных о текущем треке. Возможно, ничего не играет или истёк токен.")
-            # Показываем последние 10 строк
-            all_rows = worksheet.get_all_values()
-            if len(all_rows) > 1:
-                last_rows = all_rows[-10:]
-                df = pd.DataFrame(last_rows[1:], columns=all_rows[0]) if len(all_rows) > 1 else pd.DataFrame()
-                st.subheader("10 последних строк в таблице:")
-                st.table(df)
-            else:
-                st.info("В таблице пока только заголовки.")
-            # Автообновление каждые 10 секунд
-            st.info("Следующая проверка через 10 секунд...")
-            time.sleep(10)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Ошибка при логировании: {e}")
+                    st.info("Нет новых прослушанных треков для логирования.")
+                all_rows = worksheet.get_all_values()
+                if len(all_rows) > 1:
+                    last_rows = all_rows[-5:]
+                    df = pd.DataFrame(last_rows[1:], columns=all_rows[0]) if len(all_rows) > 1 else pd.DataFrame()
+                    st.subheader("5 последних строк в таблице:")
+                    st.table(df)
+                else:
+                    st.info("В таблице пока только заголовки.")
+            except Exception as e:
+                st.error(f"Ошибка при логировании: {e}")
+        else:
+            if st.button("Старт логирования"):
+                st.session_state.logging_active = True
 else:
     if st.button("Включить логирование"):
         if not sheet_url:
