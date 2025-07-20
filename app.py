@@ -350,6 +350,8 @@ if sheet_id and not st.session_state.spotify_auth_success:
             st.session_state.refresh_token = refresh_token
             st.session_state.spotify_auth_success = True
             st.session_state.status_message = "Авторизация Spotify восстановлена по refresh_token!"
+            st.session_state.logging_active = True
+            st.experimental_rerun()
     except Exception as e:
         st.session_state.status_message = f"Не удалось восстановить авторизацию: {e}"
 
