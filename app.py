@@ -52,17 +52,27 @@ sheet_url = st.text_input("Ссылка на Google Таблицу:", value=st.s
 # --- Spotify OAuth ---
 st.header("Авторизация Spotify")
 
-# Читаем client_id и client_secret из файла
+# Универсальная загрузка client_id и client_secret
 SPOTIFY_CREDS_PATH = "spotify-credentials.json"
-if not os.path.exists(SPOTIFY_CREDS_PATH):
-    st.error("Файл spotify-credentials.json не найден. Пожалуйста, создайте его и добавьте client_id и client_secret.")
-    st.stop()
-with open(SPOTIFY_CREDS_PATH, "r", encoding="utf-8") as f:
-    spotify_creds = json.load(f)
+if os.path.exists(SPOTIFY_CREDS_PATH):
+    with open(SPOTIFY_CREDS_PATH, "r", encoding="utf-8") as f:
+        spotify_creds = json.load(f)
+else:
+    creds_json = None
+    try:
+        import streamlit as st
+        creds_json = st.secrets["SPOTIFY_CREDENTIALS_JSON"]
+    except Exception:
+        creds_json = os.environ.get("SPOTIFY_CREDENTIALS_JSON", None)
+    if creds_json:
+        spotify_creds = json.loads(creds_json)
+    else:
+        st.error("Не найден spotify-credentials.json и не задан SPOTIFY_CREDENTIALS_JSON в секрете или переменной окружения!")
+        st.stop()
 client_id = spotify_creds.get("client_id")
 client_secret = spotify_creds.get("client_secret")
 if not client_id or not client_secret or "ВАШ_CLIENT_ID" in client_id:
-    st.error("Пожалуйста, заполните spotify-credentials.json своими данными.")
+    st.error("Пожалуйста, заполните spotify-credentials.json или секрета своими данными.")
     st.stop()
 
 # Получаем code из query params, если он есть
@@ -227,8 +237,26 @@ if st.session_state.logging_active and sheet_url:
                 'https://www.googleapis.com/auth/spreadsheets',
                 'https://www.googleapis.com/auth/drive'
             ]
+            google_creds_path = 'google-credentials.json'
+            if not os.path.exists(google_creds_path):
+                # Пробуем взять из секрета Streamlit (или переменной окружения)
+                import tempfile
+                import json
+                creds_json = None
+                try:
+                    import streamlit as st
+                    creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                except Exception:
+                    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", None)
+                if creds_json:
+                    with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".json") as tmp_gfile:
+                        tmp_gfile.write(creds_json)
+                        google_creds_path = tmp_gfile.name
+                else:
+                    st.error("Не найден google-credentials.json и не задан GOOGLE_CREDENTIALS_JSON в секрете или переменной окружения!")
+                    st.stop()
             creds = Credentials.from_service_account_file(
-                'google-credentials.json', scopes=scopes
+                google_creds_path, scopes=scopes
             )
             gc = gspread.authorize(creds)
             sh = gc.open_by_key(sheet_id)
