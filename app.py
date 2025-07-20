@@ -95,6 +95,28 @@ def extract_sheet_id(url):
     match = re.search(r"/d/([a-zA-Z0-9-_]+)", url)
     return match.group(1) if match else None
 
+# --- Работа с refresh_token в листе auth ---
+def get_auth_worksheet(gc, sh):
+    try:
+        return sh.worksheet('auth')
+    except Exception:
+        return sh.add_worksheet(title='auth', rows=10, cols=2)
+
+def save_refresh_token(sheet_id, refresh_token, auth_ws):
+    rows = auth_ws.get_all_values()
+    for i, row in enumerate(rows):
+        if row and row[0] == sheet_id:
+            auth_ws.update_cell(i+1, 2, refresh_token)
+            return
+    auth_ws.append_row([sheet_id, refresh_token])
+
+def load_refresh_token(sheet_id, auth_ws):
+    rows = auth_ws.get_all_values()
+    for row in rows:
+        if row and row[0] == sheet_id:
+            return row[1]
+    return None
+
 # Если уже авторизованы, показываем только статус
 def show_spotify_status():
     st.success("✅ Авторизация Spotify прошла успешно! Теперь можно включать логирование треков.")
@@ -137,6 +159,38 @@ else:
                 st.session_state.access_token = token_info.get("access_token")
                 st.session_state.refresh_token = token_info.get("refresh_token", st.session_state.refresh_token)
                 st.session_state.spotify_auth_success = True
+                # Сохраняем refresh_token в auth-лист
+                try:
+                    scopes = [
+                        'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive'
+                    ]
+                    google_creds_path = 'google-credentials.json'
+                    if not os.path.exists(google_creds_path):
+                        import tempfile
+                        import json
+                        creds_json = None
+                        try:
+                            import streamlit as st
+                            creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                        except Exception:
+                            creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", None)
+                        if creds_json:
+                            with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".json") as tmp_gfile:
+                                tmp_gfile.write(creds_json)
+                                google_creds_path = tmp_gfile.name
+                        else:
+                            st.error("Не найден google-credentials.json и не задан GOOGLE_CREDENTIALS_JSON в секрете или переменной окружения!")
+                            st.stop()
+                    creds = Credentials.from_service_account_file(
+                        google_creds_path, scopes=scopes
+                    )
+                    gc = gspread.authorize(creds)
+                    sh = gc.open_by_key(sheet_id)
+                    auth_ws = get_auth_worksheet(gc, sh)
+                    save_refresh_token(sheet_id, st.session_state.refresh_token, auth_ws)
+                except Exception:
+                    pass
                 show_spotify_status()
             else:
                 st.error(f"Ошибка получения токена: {response.text}")
@@ -170,6 +224,38 @@ def refresh_access_token():
         token_info = response.json()
         st.session_state.access_token = token_info.get("access_token")
         st.session_state.refresh_token = token_info.get("refresh_token", st.session_state.refresh_token)
+        # Сохраняем refresh_token в auth-лист
+        try:
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+            google_creds_path = 'google-credentials.json'
+            if not os.path.exists(google_creds_path):
+                import tempfile
+                import json
+                creds_json = None
+                try:
+                    import streamlit as st
+                    creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+                except Exception:
+                    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", None)
+                if creds_json:
+                    with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".json") as tmp_gfile:
+                        tmp_gfile.write(creds_json)
+                        google_creds_path = tmp_gfile.name
+                else:
+                    st.error("Не найден google-credentials.json и не задан GOOGLE_CREDENTIALS_JSON в секрете или переменной окружения!")
+                    st.stop()
+            creds = Credentials.from_service_account_file(
+                google_creds_path, scopes=scopes
+            )
+            gc = gspread.authorize(creds)
+            sh = gc.open_by_key(sheet_id)
+            auth_ws = get_auth_worksheet(gc, sh)
+            save_refresh_token(sheet_id, st.session_state.refresh_token, auth_ws)
+        except Exception:
+            pass
         return True
     else:
         st.error("Не удалось обновить access token. Пожалуйста, авторизуйтесь заново.")
@@ -227,6 +313,45 @@ if st.session_state.spotify_auth_success and sheet_url:
         with col2:
             if "status_message" in st.session_state:
                 st.info(st.session_state.status_message)
+
+# --- Попытка автоматической авторизации через refresh_token из auth-листа ---
+sheet_id = extract_sheet_id(sheet_url)
+if sheet_id and not st.session_state.spotify_auth_success:
+    try:
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        google_creds_path = 'google-credentials.json'
+        if not os.path.exists(google_creds_path):
+            import tempfile
+            import json
+            creds_json = None
+            try:
+                import streamlit as st
+                creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+            except Exception:
+                creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", None)
+            if creds_json:
+                with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".json") as tmp_gfile:
+                    tmp_gfile.write(creds_json)
+                    google_creds_path = tmp_gfile.name
+            else:
+                st.error("Не найден google-credentials.json и не задан GOOGLE_CREDENTIALS_JSON в секрете или переменной окружения!")
+                st.stop()
+        creds = Credentials.from_service_account_file(
+            google_creds_path, scopes=scopes
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(sheet_id)
+        auth_ws = get_auth_worksheet(gc, sh)
+        refresh_token = load_refresh_token(sheet_id, auth_ws)
+        if refresh_token:
+            st.session_state.refresh_token = refresh_token
+            st.session_state.spotify_auth_success = True
+            st.session_state.status_message = "Авторизация Spotify восстановлена по refresh_token!"
+    except Exception as e:
+        st.session_state.status_message = f"Не удалось восстановить авторизацию: {e}"
 
 # --- Блок результатов ---
 if st.session_state.logging_active and sheet_url:
