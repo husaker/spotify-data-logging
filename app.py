@@ -15,7 +15,7 @@ st.markdown("""
 **Инструкция по авторизации и настройке:**
 - Для логирования треков требуется доступ к вашему аккаунту Spotify через официальный API.
 - Для работы с Google Таблицей:
-    - Таблица должна содержать следующие заголовки в первой строке: `Date`, `Track`, `Artist`, `Spotify ID`, `URL`.
+    - Таблица должна содержать следующие заголовки в первой строке: `Date`, `Track`, `Artist`, `Spotify ID`, `URL`, `Context Type`.
     - В настройках доступа Google Таблицы добавьте в редакторы email сервисного аккаунта (`spotify-data-reader@spotify-listening-vix-prohect.iam.gserviceaccount.com`).
 - После этого вы сможете авторизоваться и разрешить приложению доступ к информации о прослушиваемых треках, а также логировать их в Google Таблицу.
 """)
@@ -23,11 +23,9 @@ st.markdown("""
 st.markdown(
     """
     <style>
-    .stButton button { margin-bottom: 0px !important; margin-top: 0px !important; }
-    .stAlert { margin-bottom: 0px !important; margin-top: 0px !important; }
-    .element-container { margin-bottom: 0px !important; margin-top: 0px !important; }
-    .st-cb { margin-bottom: 0px !important; margin-top: 0px !important; }
-    .stContainer { padding-top: 0px !important; padding-bottom: 0px !important; }
+    .stButton button { margin-bottom: 0 !important; margin-top: 0 !important; }
+    .element-container { margin-bottom: 0 !important; margin-top: 0 !important; }
+    .stContainer { padding-top: 0 !important; padding-bottom: 0 !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -202,101 +200,80 @@ def get_recent_tracks(token, after=None):
         st.error(f"Ошибка Spotify API: {resp.status_code} — {resp.text}")
         return []
 
-# Кнопка для запуска/остановки логирования
-# def logging_controls():
-#     if not st.session_state.logging_active:
-#         if st.button("Старт логирования"):
-#             st.session_state.logging_active = True
-#             st.rerun()
-#     else:
-#         if st.button("Остановить логирование"):
-#             st.session_state.logging_active = False
-#             st.success("Логирование остановлено.")
-#             st.rerun()
-
-# --- Управляющий блок ---
-# with st.container():
-#     col1, col2 = st.columns([2, 5])
-#     with col1:
-#         if st.session_state.logging_active:
-#             if st.button("Остановить логирование", use_container_width=True):
-#                 st.session_state.logging_active = False
-#                 st.session_state.status_message = "Логирование остановлено."
-#         else:
-#             if st.button("Старт логирования", use_container_width=True):
-#                 st.session_state.logging_active = True
-#                 st.session_state.status_message = "Логирование запущено."
-#     with col2:
-#         if "status_message" in st.session_state:
-#             st.info(st.session_state.status_message)
-
 # --- Блок результатов ---
 if st.session_state.spotify_auth_success and sheet_url:
     with st.container():
-        if st.session_state.logging_active:
-            if st.button("Остановить логирование", use_container_width=True):
-                st.session_state.logging_active = False
-                st.success("Логирование остановлено.")
-            st.markdown(
-                """
-                <style>
-                .element-container:has(.stButton) + .element-container { margin-top: -32px !important; }
-                </style>
-                """,
-                unsafe_allow_html=True
+        col1, col2 = st.columns([2, 5])
+        with col1:
+            if st.session_state.logging_active:
+                if st.button("Остановить логирование", use_container_width=True):
+                    st.session_state.logging_active = False
+                    st.session_state.status_message = "Логирование остановлено."
+            else:
+                if st.button("Старт логирования", use_container_width=True):
+                    st.session_state.logging_active = True
+                    st.session_state.status_message = "Логирование запущено."
+        with col2:
+            if "status_message" in st.session_state:
+                st.info(st.session_state.status_message)
+
+# --- Блок результатов ---
+if st.session_state.logging_active and sheet_url:
+    with st.spinner("Обновление данных..."):
+        try:
+            st_autorefresh(interval=120000, key="autorefresh")
+            sheet_id = extract_sheet_id(sheet_url)
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+            creds = Credentials.from_service_account_file(
+                'google-credentials.json', scopes=scopes
             )
+            gc = gspread.authorize(creds)
+            sh = gc.open_by_key(sheet_id)
+            worksheet = sh.sheet1
+            all_rows = worksheet.get_all_values()
+            expected_header = ["Date", "Track", "Artist", "Spotify ID", "URL", "Context Type"]
+            if not all_rows or all_rows[0] != expected_header:
+                worksheet.insert_row(expected_header, 1)
+                all_rows = worksheet.get_all_values()
+            logged_pairs = set()
+            for row in all_rows[1:]:
+                # Сравниваем только id и дату, независимо от длины строки
+                if len(row) >= 4:
+                    logged_pairs.add((row[3], row[0]))
             try:
-                st_autorefresh(interval=120000, key="autorefresh")
-                sheet_id = extract_sheet_id(sheet_url)
-                scopes = [
-                    'https://www.googleapis.com/auth/spreadsheets',
-                    'https://www.googleapis.com/auth/drive'
-                ]
-                creds = Credentials.from_service_account_file(
-                    'google-credentials.json', scopes=scopes
-                )
-                gc = gspread.authorize(creds)
-                sh = gc.open_by_key(sheet_id)
-                worksheet = sh.sheet1
-                all_rows = worksheet.get_all_values()
-                expected_header = ["Date", "Track", "Artist", "Spotify ID", "URL", "Context Type"]
-                if not all_rows or all_rows[0] != expected_header:
-                    worksheet.insert_row(expected_header, 1)
-                    all_rows = worksheet.get_all_values()
-                logged_pairs = set()
-                for row in all_rows[1:]:
-                    if len(row) >= 6:
-                        logged_pairs.add((row[3], row[0]))
-                try:
-                    recent_tracks = get_recent_tracks(st.session_state.access_token)
-                except Exception as e:
-                    st.error(f"Ошибка при получении треков: {e}")
-                    recent_tracks = []
-                new_logged = 0
-                for track in reversed(recent_tracks):
-                    spotify_id = track['track']['id']
-                    played_at = track['played_at']
-                    if (spotify_id, played_at) not in logged_pairs:
-                        log_track_to_sheet(track, worksheet)
-                        new_logged += 1
-                if new_logged:
-                    st.success(f"Добавлено новых треков: {new_logged}")
-                else:
-                    st.info("Нет новых прослушанных треков для логирования.")
-                all_rows = worksheet.get_all_values()
-                if len(all_rows) > 1:
-                    last_rows = all_rows[-5:]
-                    df = pd.DataFrame(last_rows[1:], columns=all_rows[0]) if len(all_rows) > 1 else pd.DataFrame()
-                    st.subheader("5 последних строк в таблице:")
-                    st.table(df)
-                else:
-                    st.info("В таблице пока только заголовки.")
+                recent_tracks = get_recent_tracks(st.session_state.access_token)
             except Exception as e:
-                st.error(f"Ошибка при логировании: {e}")
-        else:
-            if st.button("Старт логирования"):
-                st.session_state.logging_active = True
-else:
-    if st.button("Включить логирование"):
-        if not sheet_url:
-            st.error("Пожалуйста, введите ссылку на Google Таблицу.") 
+                st.session_state.status_message = f"Ошибка при получении треков: {e}"
+                recent_tracks = []
+            new_logged = 0
+            for track in reversed(recent_tracks):
+                spotify_id = track['track']['id']
+                played_at = track['played_at']
+                if (spotify_id, played_at) not in logged_pairs:
+                    log_track_to_sheet(track, worksheet)
+                    new_logged += 1
+            if new_logged:
+                st.session_state.status_message = f"Добавлено новых треков: {new_logged}"
+            else:
+                st.session_state.status_message = "Нет новых прослушанных треков для логирования."
+            all_rows = worksheet.get_all_values()
+            if len(all_rows) > 1:
+                last_rows = all_rows[-6:]
+                # Дополняем строки до нужного количества столбцов
+                n_cols = len(all_rows[0])
+                last_rows_fixed = [row + [None]*(n_cols-len(row)) if len(row)<n_cols else row for row in last_rows]
+                # Инвертируем только данные, заголовок оставляем сверху
+                if len(last_rows_fixed) > 1:
+                    data_rows = last_rows_fixed[1:][::-1]
+                    df = pd.DataFrame(data_rows, columns=all_rows[0])
+                else:
+                    df = pd.DataFrame()
+                st.subheader("5 последних строк в таблице:")
+                st.table(df)
+            else:
+                st.info("В таблице пока только заголовки.")
+        except Exception as e:
+            st.session_state.status_message = f"Ошибка при логировании: {e}" 
