@@ -104,7 +104,7 @@ if st.session_state.spotify_auth_success:
     show_spotify_status()
 else:
     # Универсальный redirect_uri
-    redirect_uri = os.environ.get("SPOTIFY_REDIRECT_URI", "http://localhost:8501")
+    redirect_uri = st.secrets.get("SPOTIFY_REDIRECT_URI", "http://localhost:8501")
     scope = "user-read-currently-playing user-read-recently-played"
     params = {
         "client_id": client_id,
