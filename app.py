@@ -86,7 +86,7 @@ if "code" in query_params:
     else:
         code_from_url = code_val
 
-# (чтобы не было жёлтой плашки)
+# Только если код изменился, обновляем session_state (чтобы не было жёлтой плашки)
 if code_from_url and not st.session_state.spotify_auth_success:
     if st.session_state.auth_code != code_from_url:
         st.session_state.auth_code = code_from_url
@@ -104,7 +104,7 @@ if st.session_state.spotify_auth_success:
     show_spotify_status()
 else:
     # Универсальный redirect_uri
-    redirect_uri = st.secrets.get("SPOTIFY_REDIRECT_URI", "http://localhost:8501")
+    redirect_uri = os.environ.get("SPOTIFY_REDIRECT_URI", "https://haskaer-spotify-logging.streamlit.app")
     scope = "user-read-currently-playing user-read-recently-played"
     params = {
         "client_id": client_id,
