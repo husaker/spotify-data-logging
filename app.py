@@ -114,7 +114,7 @@ else:
         "show_dialog": "true"
     }
     auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
-    st.markdown(f'<a href="{auth_url}" target="_self">Перейти для авторизации Spotify</a>', unsafe_allow_html=True)
+    st.markdown(f'<a href="{auth_url}" target="_blank">Перейти для авторизации Spotify</a>', unsafe_allow_html=True)
     # токен получается только автоматически
     auto_get_token = code_from_url and not st.session_state.spotify_auth_success
     if auto_get_token:
